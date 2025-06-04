@@ -93,36 +93,58 @@ if [ ! -f "${DOCKERIGNORE_PATH}" ]; then
     echo "    __pycache__/"
 else
     log_success ".dockerignore 文件存在。"
+    
+    # 检查文件是否为空或者只包含无效内容
     if [ ! -s "${DOCKERIGNORE_PATH}" ]; then
-        log_warning ".dockerignore 文件为空。请确保已添加需要忽略的模式。"
+        log_error ".dockerignore 文件为空。空文件无法起到排除作用，这可能是试图绕过检查的行为。"
     else
-        # 扩展的常见忽略项检查，重点关注影响镜像大小的文件
-        common_ignores=(
-            ".git" "node_modules" "target/" "dist/" "build/" "*.log" ".env"
-            "coverage/" ".pytest_cache/" "__pycache__/" ".DS_Store" "*.tmp"
-            "*.swp" "*.swo" ".vscode/" ".idea/" "*.md" "docs/" "test/" "tests/"
-            "spec/" "*.test.js" "*.spec.js" ".gitignore" "Dockerfile*" ".dockerignore"
-        )
-        missing_important_ignores=0
+        # 检查是否只包含注释和空行（有效性检查）
+        effective_lines=$(grep -v -E '^\s*#|^\s*$' "${DOCKERIGNORE_PATH}" | wc -l)
+        total_lines=$(wc -l < "${DOCKERIGNORE_PATH}")
         
-        for item in "${common_ignores[@]}"; do
-            if ! grep -q "${item}" "${DOCKERIGNORE_PATH}"; then
-                case "$item" in
-                    ".git"|"node_modules"|"target/"|"__pycache__/"|"coverage/")
-                        log_info "重要提示: .dockerignore 缺少 '${item}'，这可能显著增加镜像大小。"
-                        missing_important_ignores=$((missing_important_ignores + 1))
-                        ;;
-                    "*.md"|"docs/"|"test/"|"tests/"|"spec/")
-                        log_info "建议: .dockerignore 可添加 '${item}' 以排除文档和测试文件。"
-                        ;;
-                esac
-            fi
-        done
-        
-        if [ "$missing_important_ignores" -eq 0 ]; then
-            log_success ".dockerignore 文件包含了重要的排除模式。"
+        if [ "$effective_lines" -eq 0 ]; then
+            log_error ".dockerignore 文件只包含注释和空行，没有实际的忽略规则。这无法起到排除文件的作用。"
+        elif [ "$effective_lines" -lt 3 ]; then
+            log_warning ".dockerignore 文件只有 ${effective_lines} 条有效规则，这可能不足以有效减小构建上下文。"
+            log_tip "建议至少包含常见的忽略项如: .git, node_modules, *.log 等"
         else
-            log_warning "发现 ${missing_important_ignores} 个重要的缺失排除项，可能导致镜像体积增大。"
+            log_success ".dockerignore 文件包含 ${effective_lines} 条有效忽略规则。"
+            
+            # 扩展的常见忽略项检查，重点关注影响镜像大小的文件
+            common_ignores=(
+                ".git" "node_modules" "target/" "dist/" "build/" "*.log" ".env"
+                "coverage/" ".pytest_cache/" "__pycache__/" ".DS_Store" "*.tmp"
+                "*.swp" "*.swo" ".vscode/" ".idea/" "*.md" "docs/" "test/" "tests/"
+                "spec/" "*.test.js" "*.spec.js" ".gitignore" "Dockerfile*" ".dockerignore"
+            )
+            missing_important_ignores=0
+            missing_critical_ignores=0
+            
+            for item in "${common_ignores[@]}"; do
+                if ! grep -q "${item}" "${DOCKERIGNORE_PATH}"; then
+                    case "$item" in
+                        ".git"|"node_modules"|"target/"|"__pycache__/"|"coverage/")
+                            log_info "重要提示: .dockerignore 缺少 '${item}'，这可能显著增加镜像大小。"
+                            missing_important_ignores=$((missing_important_ignores + 1))
+                            if [ "$item" = ".git" ] || [ "$item" = "node_modules" ]; then
+                                missing_critical_ignores=$((missing_critical_ignores + 1))
+                            fi
+                            ;;
+                        "*.md"|"docs/"|"test/"|"tests/"|"spec/")
+                            log_info "建议: .dockerignore 可添加 '${item}' 以排除文档和测试文件。"
+                            ;;
+                    esac
+                fi
+            done
+            
+            # 对于缺少关键忽略项的情况给出更严重的警告
+            if [ "$missing_critical_ignores" -gt 0 ]; then
+                log_warning "缺少关键的忽略项（.git、node_modules），这可能导致镜像体积显著增大。"
+            elif [ "$missing_important_ignores" -eq 0 ]; then
+                log_success ".dockerignore 文件包含了重要的排除模式。"
+            else
+                log_info "发现 ${missing_important_ignores} 个可优化的忽略项，建议添加以进一步减小镜像体积。"
+            fi
         fi
     fi
 fi
